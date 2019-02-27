@@ -15,14 +15,17 @@
  */
 package org.lineageos.updater.misc;
 
+import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
+import android.os.BatteryManager;
 import android.os.Environment;
 import android.os.SystemProperties;
 import android.os.storage.StorageManager;
@@ -365,5 +368,20 @@ public class Utils {
     public static boolean isEncrypted(Context context, File file) {
         StorageManager sm = (StorageManager) context.getSystemService(Context.STORAGE_SERVICE);
         return sm.isEncrypted(file);
+    }
+
+    public static boolean isBatteryLevelOk(Activity mActivity) {
+        Intent intent = mActivity.registerReceiver(null,
+                new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (!intent.getBooleanExtra(BatteryManager.EXTRA_PRESENT, false)) {
+            return true;
+        }
+        int percent = Math.round(100.f * intent.getIntExtra(BatteryManager.EXTRA_LEVEL, 100) /
+                intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100));
+        int plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
+        int required = (plugged & BatteryManager.BATTERY_PLUGGED_ANY) != 0 ?
+                mActivity.getResources().getInteger(R.integer.battery_ok_percentage_charging) :
+                mActivity.getResources().getInteger(R.integer.battery_ok_percentage_discharging);
+        return percent >= required;
     }
 }

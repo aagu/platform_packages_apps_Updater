@@ -22,11 +22,15 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
+import android.content.res.Resources;
+import android.graphics.Color;
 import android.icu.text.DateFormat;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Message;
 import android.support.design.widget.AppBarLayout;
 import android.support.design.widget.CollapsingToolbarLayout;
 import android.support.design.widget.Snackbar;
@@ -38,13 +42,19 @@ import android.support.v7.widget.RecyclerView;
 import android.support.v7.widget.SimpleItemAnimator;
 import android.support.v7.widget.Toolbar;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
 import android.view.animation.Animation;
 import android.view.animation.LinearInterpolator;
 import android.view.animation.RotateAnimation;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.Switch;
 import android.widget.TextView;
 
@@ -54,26 +64,53 @@ import org.lineageos.updater.controller.UpdaterService;
 import org.lineageos.updater.download.DownloadClient;
 import org.lineageos.updater.misc.BuildInfoUtils;
 import org.lineageos.updater.misc.Constants;
+import org.lineageos.updater.misc.FileUtils;
 import org.lineageos.updater.misc.StringGenerator;
 import org.lineageos.updater.misc.Utils;
+import org.lineageos.updater.model.Update;
 import org.lineageos.updater.model.UpdateInfo;
+import org.lineageos.updater.model.UpdateStatus;
 
 import java.io.File;
 import java.io.IOException;
+import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import static org.lineageos.updater.misc.Utils.isBatteryLevelOk;
+
 public class UpdatesActivity extends UpdatesListActivity {
 
     private static final String TAG = "UpdatesActivity";
+    private static final String BundleKey = "downloadID";
     private UpdaterService mUpdaterService;
     private BroadcastReceiver mBroadcastReceiver;
+
+    private final int verify_ok = 1;
+    private final int verify_fial = 2;
+
+    private Handler mHandler = new Handler() {
+        public void handleMessage(Message msg) {
+            switch(msg.what){
+                case verify_ok:
+                    Bundle bundle = msg.getData();
+                    installLocalUpdate((String) bundle.get(BundleKey));
+                    break;
+                case verify_fial:
+                    showFailSnackbar();
+            }
+        }
+    };
 
     private UpdatesListAdapter mAdapter;
 
     private View mRefreshIconView;
     private RotateAnimation mRefreshAnimation;
+
+    private AlertDialog dialog;
+
+    private static final int FILE_SELECT_CODE = 11;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -201,6 +238,10 @@ public class UpdatesActivity extends UpdatesListActivity {
             }
             case R.id.menu_preferences: {
                 showPreferencesDialog();
+                return true;
+            }
+            case R.id.menu_local_update: {
+                showFileChooser();
                 return true;
             }
             case R.id.menu_show_changelog: {
@@ -451,5 +492,184 @@ public class UpdatesActivity extends UpdatesListActivity {
                     mUpdaterService.getUpdaterController().setPerformanceMode(enableABPerfMode);
                 })
                 .show();
+    }
+
+    private void showFileChooser() {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType("*/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        try {
+            startActivityForResult( Intent.createChooser(intent, "Select a File to Install"), FILE_SELECT_CODE);
+        } catch (android.content.ActivityNotFoundException ex) {
+            Log.e(TAG, "No app can handle file chosen action");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        switch (requestCode) {
+            case FILE_SELECT_CODE:
+                if (resultCode == RESULT_OK ) {
+                    final Uri uri = data.getData();
+                    String path = FileUtils.getPath(this, uri);
+                    File updateFile = new File(path);
+                    Update update = CreateLocalUpdate(updateFile);
+                    verifyUpdateAsync(update.getDownloadId());
+                }
+                break;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    private Update CreateLocalUpdate(File file) {
+        Update update = new Update();
+        update.setTimestamp(file.lastModified());
+        update.setName(file.getName());
+        update.setDownloadId("local_update");
+        update.setFileSize(file.length());
+        update.setVersion("9.0");
+        update.setFile(file);
+        mUpdaterService.getUpdaterController().addUpdate(update);
+        return update;
+    }
+
+    private void verifyUpdateAsync(final String downloadId) {
+        showProgressDialog();
+        new Thread(() -> {
+            Update update = (Update) mUpdaterService.getUpdaterController().getUpdate(downloadId);
+            File file = update.getFile();
+            if (file.exists() && verifyPackage(file)) {
+                file.setReadable(true, false);
+                update.setPersistentStatus(UpdateStatus.Persistent.VERIFIED);
+                update.setStatus(UpdateStatus.VERIFIED);
+            } else {
+                update.setPersistentStatus(UpdateStatus.Persistent.UNKNOWN);
+                update.setProgress(0);
+                update.setStatus(UpdateStatus.VERIFICATION_FAILED);
+            }
+            if (dialog != null) {
+                dialog.dismiss();
+            }
+            Message msg = new Message();
+            msg.what = verify_ok;
+            Bundle bundle = new Bundle();
+            bundle.putString(BundleKey, downloadId);
+            msg.setData(bundle);
+            mHandler.sendMessage(msg);
+        }).start();
+    }
+
+    private boolean verifyPackage(File file) {
+        try {
+            android.os.RecoverySystem.verifyPackage(file, null, null);
+            Log.d(TAG, "Verification successful");
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Verification failed", e);
+            if (!file.exists()) {
+                // The download was probably stopped. Exit silently
+                Log.e(TAG, "Error while verifying the file", e);
+            }
+            return false;
+        }
+    }
+
+    private void installLocalUpdate(final String downloadId) {
+        Update update = (Update) mUpdaterService.getUpdaterController().getUpdate(downloadId);
+        Log.d(TAG, "update object:"+(update != null));
+        final boolean canInstall = Utils.canInstall(update);
+        if (canInstall && update.getStatus().equals(UpdateStatus.VERIFIED)) {
+            getInstallDialog(update.getDownloadId()).show();
+        }
+    }
+
+    private void showFailSnackbar() {
+            this.showSnackbar(R.string.snack_update_not_installable,
+                    Snackbar.LENGTH_LONG);
+    }
+
+    private AlertDialog.Builder getInstallDialog(final String downloadId) {
+        if (!isBatteryLevelOk(this)) {
+            Resources resources = this.getResources();
+            String message = resources.getString(R.string.dialog_battery_low_message_pct,
+                    resources.getInteger(R.integer.battery_ok_percentage_discharging),
+                    resources.getInteger(R.integer.battery_ok_percentage_charging));
+            return new AlertDialog.Builder(this)
+                    .setTitle(R.string.dialog_battery_low_title)
+                    .setMessage(message)
+                    .setPositiveButton(android.R.string.ok, null);
+        }
+        UpdateInfo update = mUpdaterService.getUpdaterController().getUpdate(downloadId);
+        if (update != null) {
+            int resId;
+            try {
+                if (Utils.isABUpdate(update.getFile())) {
+                    resId = R.string.apply_update_dialog_message_ab;
+                } else {
+                    resId = R.string.apply_update_dialog_message;
+                }
+            } catch (IOException e) {
+                Log.e(TAG, "Could not determine the type of the update");
+                return null;
+            }
+
+            String buildDate = StringGenerator.getDateLocalizedUTC(this,
+                    java.text.DateFormat.MEDIUM, update.getTimestamp());
+            String buildInfoText = this.getString(R.string.list_build_version_date,
+                    BuildInfoUtils.getBuildVersion(), buildDate);
+            return new AlertDialog.Builder(this)
+                    .setTitle(R.string.apply_update_dialog_title)
+                    .setMessage(this.getString(resId, buildInfoText,
+                            this.getString(android.R.string.ok)))
+                    .setPositiveButton(android.R.string.ok,
+                            (dialog, which) -> Utils.triggerUpdate(this, downloadId))
+                    .setNegativeButton(android.R.string.cancel, null);
+        }
+        return null;
+    }
+
+    private void showProgressDialog() {
+        int llPadding = 30;
+        LinearLayout ll = new LinearLayout(this);
+        ll.setOrientation(LinearLayout.HORIZONTAL);
+        ll.setPadding(llPadding, llPadding, llPadding, llPadding);
+        ll.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams llParam = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        llParam.gravity = Gravity.CENTER;
+        ll.setLayoutParams(llParam);
+
+        ProgressBar progressBar = new ProgressBar(this);
+        progressBar.setIndeterminate(true);
+        progressBar.setPadding(0, 0, llPadding, 0);
+        progressBar.setLayoutParams(llParam);
+
+        llParam = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        llParam.gravity = Gravity.CENTER;
+        TextView tvText = new TextView(this);
+        tvText.setText("Verifying Package ...");
+        tvText.setTextColor(Color.parseColor("#000000"));
+        tvText.setTextSize(20);
+        tvText.setLayoutParams(llParam);
+
+        ll.addView(progressBar);
+        ll.addView(tvText);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setCancelable(true);
+        builder.setView(ll);
+
+        dialog = builder.create();
+        dialog.show();
+        Window window = dialog.getWindow();
+        if (window != null) {
+            WindowManager.LayoutParams layoutParams = new WindowManager.LayoutParams();
+            layoutParams.copyFrom(dialog.getWindow().getAttributes());
+            layoutParams.width = LinearLayout.LayoutParams.WRAP_CONTENT;
+            layoutParams.height = LinearLayout.LayoutParams.WRAP_CONTENT;
+            dialog.getWindow().setAttributes(layoutParams);
+        }
     }
 }
