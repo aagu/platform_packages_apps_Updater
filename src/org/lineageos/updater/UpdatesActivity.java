@@ -538,23 +538,24 @@ public class UpdatesActivity extends UpdatesListActivity {
         new Thread(() -> {
             Update update = (Update) mUpdaterService.getUpdaterController().getUpdate(downloadId);
             File file = update.getFile();
+            Message msg = new Message();
             if (file.exists() && verifyPackage(file)) {
                 file.setReadable(true, false);
                 update.setPersistentStatus(UpdateStatus.Persistent.VERIFIED);
                 update.setStatus(UpdateStatus.VERIFIED);
+                msg.what = verify_ok;
+                Bundle bundle = new Bundle();
+                bundle.putString(BundleKey, downloadId);
+                msg.setData(bundle);
             } else {
                 update.setPersistentStatus(UpdateStatus.Persistent.UNKNOWN);
                 update.setProgress(0);
                 update.setStatus(UpdateStatus.VERIFICATION_FAILED);
+                msg.what = verify_fial;
             }
             if (dialog != null) {
                 dialog.dismiss();
             }
-            Message msg = new Message();
-            msg.what = verify_ok;
-            Bundle bundle = new Bundle();
-            bundle.putString(BundleKey, downloadId);
-            msg.setData(bundle);
             mHandler.sendMessage(msg);
         }).start();
     }
@@ -576,7 +577,6 @@ public class UpdatesActivity extends UpdatesListActivity {
 
     private void installLocalUpdate(final String downloadId) {
         Update update = (Update) mUpdaterService.getUpdaterController().getUpdate(downloadId);
-        Log.d(TAG, "update object:"+(update != null));
         final boolean canInstall = Utils.canInstall(update);
         if (canInstall && update.getStatus().equals(UpdateStatus.VERIFIED)) {
             getInstallDialog(update.getDownloadId()).show();
@@ -629,47 +629,13 @@ public class UpdatesActivity extends UpdatesListActivity {
     }
 
     private void showProgressDialog() {
-        int llPadding = 30;
-        LinearLayout ll = new LinearLayout(this);
-        ll.setOrientation(LinearLayout.HORIZONTAL);
-        ll.setPadding(llPadding, llPadding, llPadding, llPadding);
-        ll.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams llParam = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        llParam.gravity = Gravity.CENTER;
-        ll.setLayoutParams(llParam);
-
-        ProgressBar progressBar = new ProgressBar(this);
-        progressBar.setIndeterminate(true);
-        progressBar.setPadding(0, 0, llPadding, 0);
-        progressBar.setLayoutParams(llParam);
-
-        llParam = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        llParam.gravity = Gravity.CENTER;
-        TextView tvText = new TextView(this);
-        tvText.setText("Verifying Package ...");
-        tvText.setTextColor(Color.parseColor("#000000"));
-        tvText.setTextSize(20);
-        tvText.setLayoutParams(llParam);
-
-        ll.addView(progressBar);
-        ll.addView(tvText);
+        View view = LayoutInflater.from(this).inflate(R.layout.progress_dialog, null);
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setCancelable(true);
-        builder.setView(ll);
+        builder.setView(view);
 
         dialog = builder.create();
         dialog.show();
-        Window window = dialog.getWindow();
-        if (window != null) {
-            WindowManager.LayoutParams layoutParams = new WindowManager.LayoutParams();
-            layoutParams.copyFrom(dialog.getWindow().getAttributes());
-            layoutParams.width = LinearLayout.LayoutParams.WRAP_CONTENT;
-            layoutParams.height = LinearLayout.LayoutParams.WRAP_CONTENT;
-            dialog.getWindow().setAttributes(layoutParams);
-        }
     }
 }
