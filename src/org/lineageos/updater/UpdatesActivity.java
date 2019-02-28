@@ -23,7 +23,6 @@ import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.res.Resources;
-import android.graphics.Color;
 import android.icu.text.DateFormat;
 import android.net.Uri;
 import android.os.Build;
@@ -42,19 +41,13 @@ import android.support.v7.widget.RecyclerView;
 import android.support.v7.widget.SimpleItemAnimator;
 import android.support.v7.widget.Toolbar;
 import android.util.Log;
-import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.view.ViewGroup;
-import android.view.Window;
-import android.view.WindowManager;
 import android.view.animation.Animation;
 import android.view.animation.LinearInterpolator;
 import android.view.animation.RotateAnimation;
-import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.Switch;
 import android.widget.TextView;
 
@@ -73,7 +66,6 @@ import org.lineageos.updater.model.UpdateStatus;
 
 import java.io.File;
 import java.io.IOException;
-import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -88,7 +80,7 @@ public class UpdatesActivity extends UpdatesListActivity {
     private BroadcastReceiver mBroadcastReceiver;
 
     private final int verify_ok = 1;
-    private final int verify_fial = 2;
+    private final int verify_fail = 2;
 
     private Handler mHandler = new Handler() {
         public void handleMessage(Message msg) {
@@ -97,7 +89,7 @@ public class UpdatesActivity extends UpdatesListActivity {
                     Bundle bundle = msg.getData();
                     installLocalUpdate((String) bundle.get(BundleKey));
                     break;
-                case verify_fial:
+                case verify_fail:
                     showFailSnackbar();
             }
         }
@@ -551,7 +543,7 @@ public class UpdatesActivity extends UpdatesListActivity {
                 update.setPersistentStatus(UpdateStatus.Persistent.UNKNOWN);
                 update.setProgress(0);
                 update.setStatus(UpdateStatus.VERIFICATION_FAILED);
-                msg.what = verify_fial;
+                msg.what = verify_fail;
             }
             if (dialog != null) {
                 dialog.dismiss();
